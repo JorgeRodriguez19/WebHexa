@@ -3,16 +3,34 @@
 > **Punto de entrada tras un `/clear`.** Este archivo resume el estado completo del
 > proyecto para poder retomar el trabajo sin volver a analizar nada.
 >
-> Última actualización: **2026-08-10**, al terminar la construcción inicial.
+> Última actualización: **2026-08-21**.
 >
 > Documentos complementarios, en el mismo directorio:
 > - **`CLAUDE.md`** — manual técnico: arranque, arquitectura, modelo de datos real,
->   tabla de reglas de negocio, perfiles, alcance.
+>   tabla de reglas de negocio, sesión y alcance.
+> - **`DESPLIEGUE.md`** — procedimiento completo para publicar en Railway.
 > - **`ANALISIS.md`** — trazabilidad: de dónde salió cada decisión y cómo se
 >   resolvieron las contradicciones entre los archivos fuente.
 >
 > **Ojo:** la sesión suele estar rooteada en `C:\Users\PC\Documents\Devol\Claude Code`,
 > no en este proyecto, así que `CLAUDE.md` **no se auto-carga**. Hay que leerlo a mano.
+>
+> **Lee la sección 12 (historial de cambios) antes de tocar nada:** las secciones
+> 1–11 describen la construcción inicial y algunas quedaron superadas por cambios
+> posteriores. Donde haya contradicción, **manda la sección 12**.
+
+---
+
+## 0. Estado actual en una pantalla
+
+| | |
+|---|---|
+| **Base de datos** | `beta` en AWS RDS = **PRODUCCIÓN**, compartida con el chatbot de WhatsApp. `.env` tiene `PGSCHEMA=beta`. |
+| **Acceso** | **Login real.** `office.manager@hexa.com.mx` solo ve HEXA; `admin@hexa.com.mx` es superusuario. Contraseñas iniciales en `scripts/migracion-login.mjs`. |
+| **Arranque local** | `npm run dev` → API :4000 + web :5173. Modo producción: `npm run build` y `npm start` (un solo servicio). |
+| **Pruebas** | `npm run smoke` (interfaz en jsdom) · `npm run login` (aislamiento) · `npm run prueba` (escritura, **solo development**). |
+| **Repositorio** | git en `main`, 2 commits. **Falta subirlo a GitHub** y crear el proyecto en Railway. |
+| **Decisión abierta** | Bajas y reactivaciones de acceso (`tipo_cambio` B y A) están **deshabilitadas en beta**. Jorge quedó de decidir. |
 
 ---
 
@@ -79,12 +97,18 @@ Host `db-hexa.cpmk6okaa11k.us-east-2.rds.amazonaws.com`, base `hexa`, usuario `p
 Se le preguntó y respondió esto. **No revertir sin volver a preguntar.**
 
 1. **Ubicación** → proyecto nuevo en `Web Hexa 2`, sin tocar el anterior.
-2. **Identidad de usuario** → **selector de empresa/perfil en la barra superior**,
-   como el prototipo. Sin login, sin cambios de schema.
+2. ~~**Identidad de usuario** → selector de empresa/perfil en la barra superior,
+   como el prototipo. Sin login, sin cambios de schema.~~
+   **SUPERADA el 2026-08-14:** pidió login real con aislamiento por empresa. Ver
+   sección 12.
 3. **Alcance** → **solo el panel de accesos y salas del prototipo**.
    Descartó explícitamente: administración de catálogos, vista de conversaciones
    del chatbot (`logmensajes` / `n8n_chat_histories`), y la gestión completa de
    inventario.
+4. **Base de datos** (2026-08-14) → conectar a **`beta` = producción**, con
+   lectura y escritura.
+5. **Despliegue** (2026-08-21) → **Railway** con una **copia** de `beta` para
+   demo, y **GitHub** como origen del despliegue.
 
 ---
 
@@ -102,10 +126,17 @@ npm run dev          # API en :4000 + web en :5173
 | `npm run server` | Solo la API (Express 5, puerto 4000) |
 | `npm run web` | Solo la web (Vite 6, puerto 5173, proxea `/api` al 4000) |
 | `npm run build` | Build de producción |
-| `npm run smoke` | Monta la app en jsdom contra la API viva y recorre las seis vistas |
-| `npm run prueba` | Prueba de escritura de punta a punta; **deshace todo al terminar** |
-| `npm run integridad` | Compara los conteos del schema contra el estado esperado |
+| `npm start` | **Modo producción: un solo servicio** sirve `dist/` + `/api` |
+| `npm run smoke` | Monta la app en jsdom, pasa por el login y recorre las seis vistas. `SMOKE_USUARIO`/`SMOKE_CLAVE` cambian el perfil; `SMOKE_API` el destino |
+| `npm run login` | 27 comprobaciones de login y aislamiento por empresa. **No escribe** |
+| `npm run prueba` | Escritura de punta a punta; deshace todo. **Aborta si el schema no es development** |
+| `npm run integridad` | Conteos de `development` contra el estado esperado |
 | `npm run restos` | Busca filas de prueba olvidadas |
+| `npm run comparar` | Diferencias de estructura entre `development` y `beta`. Solo lee |
+| `npm run analizar` | Radiografía de `beta`. Solo lee |
+| `npm run copiar <or> <dest> [--aplicar]` | Copia un schema entero a otra base (`DESTINO_URL`). Solo lee del origen |
+| `npm run migracion <schema> [--aplicar]` | Crea `web_credenciales` y las cuentas. Idempotente |
+| `npm run credencial <schema> listar\|clave\|crear\|baja` | Administra cuentas |
 
 **Stack:** React 18 + Vite 6 + Tailwind v4 (`@tailwindcss/vite`) + lucide-react ·
 Express 5 + `pg` · jsdom + esbuild solo para las pruebas.
@@ -126,26 +157,35 @@ shared/reglas.js        Reglas de negocio puras (RN-###). ÚNICO módulo que imp
                         cliente y la del backend no diverjan. 150 líneas.
 
 server/
-  db.js                 Pool de pg, guardia de schema, parsers de tipo
+  db.js                 Pool de pg, guardia de schema, ENTORNO, parsers de tipo,
+                        soporte de DATABASE_URL y SSL configurable
+  capacidades.js        Diferencias de estructura entre `beta` y `development`
+  auth.js               scrypt, tokens HMAC, middleware de sesión, alcance
   sql.js                TODAS las consultas SQL, cada una con su nota de negocio
   util.js               Validación de entrada + clase ErrorHttp
-  index.js              App Express, montaje de rutas, manejador central de errores
+  index.js              App Express, sirve dist/ en producción, errores
+  rutas/sesion.js       Login, /auth/yo, freno de intentos fallidos
   rutas/lectura.js      GET catálogos, panel por empresa, ocupación, bandeja admin
   rutas/accesos.js      Solicitudes N/R/S/A/B, resolución, empleados, vehículos
   rutas/salas.js        Disponibilidad, solicitudes de sala, resolución
 
 src/
-  App.jsx               Shell: selectores, carga de datos, acciones, avisos, nav
+  App.jsx               Shell: sesión, carga de datos, acciones, avisos, nav
   estilos.css           Tema Hexa completo (importa Tailwind + todas las clases hx-*)
-  lib/api.js            Cliente HTTP; propaga { error, rn } de la API
+  lib/api.js            Cliente HTTP; guarda el token; propaga { error, rn }
   lib/ui.jsx            Componentes del prototipo (Card, Btn, Badge, Field, Modal,
                         Gauge, Franja, Cabecera, Metrica, Vacio, Linea, Cargando)
   lib/fmt.js            Fechas legibles, dinero (USD), folios
   lib/useOcupacion.js   Hook que consulta la ocupación de un día
-  vistas/               Resumen · Salas · Accesos · Empleados · Vehiculos · Solicitudes
+  vistas/               Login · Resumen · Salas · Accesos · Empleados ·
+                        Vehiculos · Solicitudes
 
-scripts/                smoke.mjs · prueba-escritura.mjs · verificar-integridad.mjs
-                        · revisar-restos.mjs
+scripts/                smoke.mjs · prueba-login.mjs · prueba-escritura.mjs ·
+                        verificar-integridad.mjs · revisar-restos.mjs ·
+                        comparar-schemas.mjs · analizar-beta.mjs ·
+                        copiar-schema.mjs · migracion-login.mjs · credencial.mjs
+
+railway.json            Build, arranque y healthcheck para Railway
 ```
 
 **Dónde vive cada validación:** las reglas se comprueban **en el servidor, siempre,
@@ -154,23 +194,30 @@ discrepan, gana el servidor y su mensaje se muestra tal cual, con su `RN-###`.
 
 ### Endpoints
 
+**Todo exige sesión salvo `/api/salud` y `/api/auth/login`.** El token va en
+`Authorization: Bearer`. La empresa sale del token firmado, no del cuerpo.
+
 ```
-GET   /api/salud
-GET   /api/catalogos                          empresas, usuarios, salas, horarios, tipos
-GET   /api/empresa/:id/panel                  todo lo de una empresa en una llamada
-GET   /api/reservaciones?desde=YYYY-MM-DD
-GET   /api/ocupacion/:fecha                   aprobadas + pendientes, todas las salas
-GET   /api/administracion/solicitudes         bandeja de todas las empresas
+GET   /api/salud                              público · incluye { entorno }
+POST  /api/auth/login                         público · { correo, password } → { token, perfil }
+GET   /api/auth/yo                            revalida el token al recargar
+
+GET   /api/catalogos                          empresas y usuarios acotados a la sesión
+GET   /api/empresa/:id/panel                  403 si la empresa no es la tuya
+GET   /api/reservaciones?desde=YYYY-MM-DD     filtradas por empresa
+GET   /api/ocupacion/:fecha                   todas las salas; los bloques ajenos
+                                              llegan SIN evento ni solicitante
+GET   /api/administracion/solicitudes         solo superusuario
 GET   /api/salas/disponibles?fecha&hora_inicio&hora_fin&num_invitados[&ignorar]
 POST  /api/solicitudes/acceso                 tipo_cambio N|R|S|A|B
-PATCH /api/solicitudes/acceso/:id/resolver    exige perfil=administracion
+PATCH /api/solicitudes/acceso/:id/resolver    solo superusuario
 PATCH /api/solicitudes/acceso/:id/cancelar
 POST  /api/solicitudes/sala
-PATCH /api/solicitudes/sala/:id/resolver      exige perfil=administracion
+PATCH /api/solicitudes/sala/:id/resolver      solo superusuario
 PATCH /api/solicitudes/sala/:id/cancelar
 POST  /api/empleados                          alta directa (sin revisión)
 POST  /api/vehiculos                          alta directa (sin revisión)
-GET   /api/empleados/buscar?id_empresa&q
+GET   /api/empleados/buscar?q
 ```
 
 ---
@@ -343,12 +390,32 @@ Nada de esto está implementado:
 
 ## 11. Cómo retomar
 
-1. Leer este archivo, después `CLAUDE.md` y, si hace falta entender el *porqué* de
-   alguna decisión, `ANALISIS.md`.
+1. Leer este archivo **empezando por la sección 0 y la 12**, después `CLAUDE.md`.
+   Si hace falta entender el *porqué* de alguna decisión, `ANALISIS.md`.
+   Para desplegar, `DESPLIEGUE.md`.
 2. `cd "C:\Users\PC\Documents\Devol\Web Hexa 2"` y `npm run dev`.
-3. Antes de dar por buena cualquier modificación: `npm run build`, `npm run smoke`,
-   y si tocó escritura, `npm run prueba` seguido de `npm run integridad`.
-4. **Nunca** apuntar a un schema distinto de `development`.
+   Los servidores **se caen al apagar la PC**: Jorge suele pedir que se
+   relancen. Si el puerto está ocupado por un proceso viejo, hay que liberarlo
+   antes o Vite se mueve solo al 5174.
+3. Entrar con `office.manager@hexa.com.mx` o `admin@hexa.com.mx` (contraseñas en
+   `scripts/migracion-login.mjs`, salvo que ya se hayan cambiado).
+4. Antes de dar por buena cualquier modificación:
+   `npm run build` · `npm run smoke` · `npm run login`.
+   Si se tocó escritura: **cambiar a `development`**, `npm run prueba` y
+   `npm run integridad`. Nunca contra `beta`.
+5. **Nunca** apuntar a `public` ni `test`. `beta` es producción real: cada
+   escritura la ve el chatbot.
+
+### Cosas del entorno que conviene saber
+
+- `preview_start` del harness **no funciona en esta máquina**. La verificación
+  visual la hace Jorge en el navegador; lo automatizado va por jsdom.
+- No hay `pg_dump`, ni `gh`, ni la CLI de Railway instalados. Sí hay git y Node 24.
+- Windows: los comandos de PowerShell para matar procesos por puerto a veces los
+  bloquea el clasificador de permisos. Alternativa: usar otro puerto.
+- El freno de login es por IP: si se prueban muchas contraseñas malas seguidas,
+  las pruebas siguientes fallan con 429 hasta que pase la ventana o se reinicie
+  la API.
 
 ---
 
@@ -575,3 +642,23 @@ restricciones al final y reposiciona las secuencias. **Solo lee del origen.**
 tener una sola fuente de verdad hay que mover la base y repuntar n8n (la
 credencial de Postgres en n8n es única y compartida por todos los nodos), o
 conectar Railway a RDS resolviendo el filtrado por IP del security group.
+
+---
+
+## 13. Lo siguiente
+
+Por orden de lo que quedó a medias:
+
+1. **Subir el repo a GitHub y desplegar en Railway.** El código ya está listo y
+   probado en modo producción; falta la parte que solo puede hacer Jorge: crear
+   el repo remoto, el proyecto en Railway, poner las variables y correr la copia
+   de datos. Pasos exactos en `DESPLIEGUE.md`.
+2. **Cambiar las contraseñas iniciales** antes de compartir cualquier URL.
+3. **Decidir las bajas de acceso en `beta`** (`tipo_cambio` B y A). Hoy devuelven
+   un error explicativo con RN-016 en lugar de borrar filas de `accesos`.
+4. **Decidir si la base se unifica** con el chatbot (sección 12) o si la demo de
+   Railway se acepta como foto congelada.
+5. Si el panel sale de la red interna: cookie `HttpOnly` en vez de
+   `localStorage`, y bitácora de accesos.
+
+Nada de esto bloquea el uso local, que funciona hoy.

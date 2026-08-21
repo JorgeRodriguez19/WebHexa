@@ -1,0 +1,21 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+
+# Configuración local del editor / harness
+.claude/
+
+# Secretos. NUNCA se versionan.
+.env
+.env.*
+!.env.example
+
+# Insumos del análisis: no hacen falta para ejecutar la app y contienen
+# información del cliente. Se conservan en la carpeta local del proyecto.
+#   - "Base de datos.txt" trae las credenciales de la base EN CLARO.
+#   - El .json de n8n incluye los prompts y la arquitectura del chatbot.
+Base de datos.txt
+Chatbot Hexa BETA - Whatsapp Meta.json
+Documentacion_Chatbot_Hexa_BETA_WhatsApp.md
+panel-hexa-accesos-salas.jsx

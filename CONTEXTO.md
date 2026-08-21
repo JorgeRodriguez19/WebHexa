@@ -534,7 +534,44 @@ actúa a nombre del primer usuario activo de la empresa que está viendo
 con las dos: como Office Manager comprueba que no hay selector de empresa, no ve
 la bandeja global ni botones de aprobar.
 
-**Pendiente de seguridad:** el token va en `localStorage` y la API habla HTTP en
-red local. Para exponerlo fuera hace falta HTTPS y conviene mover el token a una
-cookie `HttpOnly`. Las contraseñas iniciales son públicas en este documento:
-**cámbialas con `npm run credencial` antes de dar acceso a nadie.**
+**Pendiente de seguridad:** el token va en `localStorage`. Con HTTPS es
+aceptable, pero lo correcto es una cookie `HttpOnly` + `Secure`.
+
+### 2026-08-21 — Preparado para desplegar en Railway
+
+Ver **`DESPLIEGUE.md`** para el procedimiento completo. Resumen de lo que cambió
+en el código:
+
+- **Un solo servicio.** `server/index.js` sirve el build de `dist/` con fallback
+  de SPA además de `/api`, así que no hacen falta dos servicios ni CORS. En
+  desarrollo sigue funcionando igual (si no hay `dist/`, se abre CORS y Vite
+  proxea).
+- **`DATABASE_URL` y SSL configurable** en `server/db.js`: RDS lo exige, el
+  Postgres interno de Railway falla si se fuerza. Se decide por `PGSSL` o se
+  deduce del host.
+- **`PORT` y `0.0.0.0`**, más `trust proxy` para ver la IP real detrás del proxy.
+- **Freno de fuerza bruta en el login**: 8 fallos por IP y por correo en 15
+  minutos, luego 429. En memoria, se olvida al reiniciar.
+
+**Distinción nueva: `ENTORNO` vs `PGSCHEMA`.** Antes "beta" implicaba
+producción; ahora son cosas separadas, porque la copia de Railway **también** se
+llama `beta` (para que la estructura coincida: sin `"Status"`, sin `aprobado`)
+pero no es producción. `ENTORNO=demo` hace que el distintivo diga "Demo" y que
+la web no advierta en rojo. `ES_PRODUCCION` depende de `ENTORNO`; las
+capacidades de estructura siguen dependiendo del nombre del schema.
+
+**Repositorio:** el proyecto ya es un repo git en `main`, con un commit. El
+`.gitignore` excluye `.env`, **`Base de datos.txt`** (credenciales en claro), el
+`.json` del flujo n8n, la documentación del cliente y el prototipo `.jsx`. Se
+conservan en la carpeta local pero **no se versionan**. El repo debe ser
+**privado**.
+
+**Script nuevo:** `npm run copiar <origen> <destino> [--aplicar]` copia un schema
+entero entre bases sin `pg_dump` (no está instalado). Lee el DDL de
+`pg_catalog`, conserva los ids originales con `overriding system value`, recrea
+restricciones al final y reposiciona las secuencias. **Solo lee del origen.**
+
+**La copia de Railway divergirá:** el chatbot sigue escribiendo en RDS. Para
+tener una sola fuente de verdad hay que mover la base y repuntar n8n (la
+credencial de Postgres en n8n es única y compartida por todos los nodos), o
+conectar Railway a RDS resolviendo el filtrado por IP del security group.

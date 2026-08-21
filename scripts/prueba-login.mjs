@@ -71,6 +71,16 @@ const login = await pedir("/auth/login", {
 ok("login correcto", login.status === 200, JSON.stringify(login.datos));
 const token = login.datos?.token;
 const perfil = login.datos?.perfil;
+
+/* Sin sesión no tiene sentido seguir: el resto de las pruebas fallaría en
+   cascada con errores confusos en lugar de decir qué pasó de verdad. */
+if (!token || !perfil) {
+  console.log(`\n[ABORTADO] No se pudo iniciar sesión: ${login.datos?.error ?? "sin respuesta"}`);
+  if (login.status === 429)
+    console.log("Es el freno de intentos fallidos. Espera la ventana o reinicia la API.");
+  else console.log("Corre la migración: node scripts/migracion-login.mjs <schema> --aplicar");
+  process.exit(1);
+}
 console.log(`        → ${perfil?.nombre} · ${perfil?.empresa} (empresa ${perfil?.id_empresa})`);
 ok("no es superusuario", perfil?.superusuario === false);
 ok("tiene empresa asignada", !!perfil?.id_empresa);

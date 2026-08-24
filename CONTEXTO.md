@@ -3,7 +3,7 @@
 > **Punto de entrada tras un `/clear`.** Este archivo resume el estado completo del
 > proyecto para poder retomar el trabajo sin volver a analizar nada.
 >
-> Última actualización: **2026-08-21**.
+> Última actualización: **2026-08-24**.
 >
 > Documentos complementarios, en el mismo directorio:
 > - **`CLAUDE.md`** — manual técnico: arranque, arquitectura, modelo de datos real,
@@ -29,7 +29,8 @@
 | **Acceso** | **Login real.** `office.manager@hexa.com.mx` solo ve HEXA; `admin@hexa.com.mx` es superusuario. Contraseñas iniciales en `scripts/migracion-login.mjs`. |
 | **Arranque local** | `npm run dev` → API :4000 + web :5173. Modo producción: `npm run build` y `npm start` (un solo servicio). |
 | **Pruebas** | `npm run smoke` (interfaz en jsdom) · `npm run login` (aislamiento) · `npm run prueba` (escritura, **solo development**). |
-| **Repositorio** | git en `main`, 2 commits. **Falta subirlo a GitHub** y crear el proyecto en Railway. |
+| **Repositorio** | `https://github.com/JorgeRodriguez19/WebHexa`, rama `main`. Privado. |
+| **Despliegue** | Railway, servicio `WebHexa`, **conectado directo a RDS `beta`** (sin réplica). Ver `DESPLIEGUE.md`. |
 | **Decisión abierta** | Bajas y reactivaciones de acceso (`tipo_cambio` B y A) están **deshabilitadas en beta**. Jorge quedó de decidir. |
 
 ---
@@ -643,22 +644,63 @@ tener una sola fuente de verdad hay que mover la base y repuntar n8n (la
 credencial de Postgres en n8n es única y compartida por todos los nodos), o
 conectar Railway a RDS resolviendo el filtrado por IP del security group.
 
+### 2026-08-24 — Desplegado en Railway conectado DIRECTO a RDS `beta`
+
+**Se descartó la réplica.** Jorge mostró un proyecto anterior de Railway cuyas
+variables apuntaban a `db-hexa.cpmk6okaa11k.us-east-2.rds.amazonaws.com`, lo que
+prueba que **el security group de RDS acepta conexiones desde cualquier IP**. Mi
+análisis del 2026-08-21 asumió lo contrario (que haría falta IP de salida fija) y
+por eso propuso copiar el schema. Con la conexión directa, la web y el chatbot
+comparten la misma base de verdad, que era el objetivo original.
+
+Configuración del servicio `WebHexa` en Railway: las variables sueltas
+(`PGHOST`, `PGPORT`, `PGDATABASE=hexa`, `PGUSER`, `PGPASSWORD`), más
+`PGSCHEMA=beta`, `PGSSL=on`, `ENTORNO=produccion` y `SESION_SECRETO`.
+**Sin `DATABASE_URL`** (tiene prioridad y desviaría la conexión) y **sin
+servicio de Postgres** en Railway. Tabla completa en `DESPLIEGUE.md`.
+
+Trampas que costaron tiempo, por si reaparecen:
+
+- **`0 Variables` → healthcheck rojo.** El primer despliegue daba *Build ✓ ·
+  Deploy ✓ · Network → Healthcheck ✗*. Sin variables, `verificarConexion()` no
+  tiene host, `process.exit(1)`, y nadie responde en `/api/salud`. Los **Deploy
+  Logs** lo dicen: `[hexa] no se pudo conectar a la base`.
+- **Nombres de variables.** El proyecto viejo usaba `PG_HOST`/`PG_DB` con guion
+  bajo y `SESSION_SECRET` en inglés. Este código lee los nombres de `libpq`
+  (`PGHOST`…) y `SESION_SECRETO` en español.
+- **git y el certificado.** `git push` fallaba con `SSL certificate problem:
+  unable to get local issuer certificate` (la red intercepta HTTPS). Se resolvió
+  con `git config http.sslBackend schannel`, que usa el almacén de Windows, sin
+  desactivar la verificación.
+- **Cambiar de cuenta de GitHub** = borrar la credencial de GCM con
+  `git credential reject`. Por tubería falla en PowerShell 5.1 (*"refusing to
+  work with credential missing protocol field"*); hay que pasarle un archivo con
+  `cmd /c "git credential reject < archivo"`.
+
+**Riesgos que esto abre** (quedaron avisados a Jorge): el panel está en internet
+escribiendo sobre producción, protegido solo por el login; la base productiva
+acepta conexiones desde cualquier IP con una contraseña que ha circulado en
+claro (`Base de datos.txt`, y una captura de pantalla); y la `OPENAI_API_KEY` del
+proyecto viejo quedó expuesta en esa misma captura — se le pidió rotarla.
+
 ---
 
 ## 13. Lo siguiente
 
 Por orden de lo que quedó a medias:
 
-1. **Subir el repo a GitHub y desplegar en Railway.** El código ya está listo y
-   probado en modo producción; falta la parte que solo puede hacer Jorge: crear
-   el repo remoto, el proyecto en Railway, poner las variables y correr la copia
-   de datos. Pasos exactos en `DESPLIEGUE.md`.
-2. **Cambiar las contraseñas iniciales** antes de compartir cualquier URL.
+1. **Cambiar las contraseñas iniciales** — urgente. Están escritas en
+   `scripts/migracion-login.mjs`, que vive en el repositorio, y el panel ya
+   escribe en producción desde internet:
+   `npm run credencial beta clave <correo> <nueva>`.
+2. **Rotar la `OPENAI_API_KEY`** del proyecto viejo de Railway (quedó expuesta) y
+   valorar rotar la contraseña de RDS, lo que implica actualizar la credencial de
+   Postgres en n8n.
 3. **Decidir las bajas de acceso en `beta`** (`tipo_cambio` B y A). Hoy devuelven
    un error explicativo con RN-016 en lugar de borrar filas de `accesos`.
-4. **Decidir si la base se unifica** con el chatbot (sección 12) o si la demo de
-   Railway se acepta como foto congelada.
-5. Si el panel sale de la red interna: cookie `HttpOnly` en vez de
-   `localStorage`, y bitácora de accesos.
+4. **Endurecer el panel ahora que está expuesto:** cookie `HttpOnly` + `Secure`
+   en vez de `localStorage`, y bitácora de accesos (hoy solo `ultimo_acceso`).
+5. Restringir el security group de RDS a lo necesario, en coordinación con quien
+   administre AWS.
 
 Nada de esto bloquea el uso local, que funciona hoy.

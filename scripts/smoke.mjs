@@ -332,6 +332,41 @@ if (reservar && !reservar.disabled) {
     );
     await esperar(200);
   }
+
+  /*
+   * Mover la hora de inicio más allá de la de término.
+   * Bug real reportado por los usuarios: las opciones de término se filtran a
+   * las posteriores al inicio, así que la que estaba elegida desaparecía de la
+   * lista. Un <select> sin opción coincidente NO dispara onChange, de modo que
+   * la pantalla mostraba una hora y el estado conservaba la vieja: se enviaba
+   * un rango invertido y el servidor respondía RN-019 "La hora de término debe
+   * ser posterior a la de inicio", con el formulario mostrando datos válidos.
+   */
+  const horas = $$(".hx-modal select.hx-input");
+  if (horas.length >= 2) {
+    const [inicio, fin] = horas;
+    const ponerSelect = Object.getOwnPropertyDescriptor(
+      window.HTMLSelectElement.prototype,
+      "value"
+    ).set;
+    const tarde = "13:00";
+    ponerSelect.call(inicio, tarde);
+    inicio.dispatchEvent(new window.Event("change", { bubbles: true }));
+    await esperar(120);
+    comprobar(
+      "al adelantar el inicio, el término se arrastra y sigue siendo posterior",
+      !!fin.value && fin.value > tarde,
+      `inicio ${inicio.value}, término "${fin.value}"`
+    );
+    comprobar(
+      "el término mostrado coincide con la opción seleccionada",
+      fin.value === (fin.options[fin.selectedIndex]?.value ?? ""),
+      `value "${fin.value}" vs opción "${fin.options[fin.selectedIndex]?.value}"`
+    );
+  } else {
+    comprobar("el modal tiene los dos selectores de hora", false, `${horas.length} selectores`);
+  }
+
   const buscar = $$(".hx-modal .hx-btn").find((b) => b.textContent.includes("Buscar sala"));
   await clic(buscar);
   await esperar(1200);

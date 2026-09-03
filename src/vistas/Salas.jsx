@@ -18,11 +18,13 @@ import { api } from "../lib/api.js";
 import { dinero, fechaCorta, fechaLarga, folioSala, hhmm } from "../lib/fmt.js";
 import {
   CAPACIDAD_MAXIMA,
+  CIERRE_TORRE,
   costoEstimado,
   diasHabilesSiguientes,
   esDiaHabil,
   horasEntre,
   rejillaHoras,
+  toHora,
   toMin,
 } from "../../shared/reglas.js";
 
@@ -219,6 +221,21 @@ function WizardReserva({ ctx, onClose }) {
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
+  /*
+   * Mover la hora de inicio tiene que arrastrar la de término.
+   * Las opciones de término se filtran a las posteriores al inicio, y un
+   * <select> cuyo value no está entre sus opciones muestra la primera SIN
+   * disparar onChange: la pantalla decía 13:30 mientras el estado seguía en
+   * 11:00, y se enviaba un rango invertido que el servidor rechazaba con
+   * RN-019. Se conserva la duración elegida y se topa en el cierre de la torre.
+   */
+  const cambiarInicio = (v) =>
+    setForm((f) => {
+      const duracion = Math.max(30, toMin(f.hora_fin) - toMin(f.hora_inicio));
+      const fin = Math.min(toMin(v) + duracion, toMin(CIERRE_TORRE));
+      return { ...f, hora_inicio: v, hora_fin: toHora(fin) };
+    });
+
   /* Ocupación del día elegido, para pintar la franja de cada opción. */
   const { ocupacion } = useOcupacion(paso >= 2 ? form.fecha : null);
 
@@ -324,7 +341,7 @@ function WizardReserva({ ctx, onClose }) {
               <select
                 className="hx-input mono"
                 value={form.hora_inicio}
-                onChange={(e) => set("hora_inicio", e.target.value)}
+                onChange={(e) => cambiarInicio(e.target.value)}
               >
                 {HORAS.slice(0, -1).map((h) => (
                   <option key={h}>{h}</option>

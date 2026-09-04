@@ -27,6 +27,8 @@ export default function App() {
   /* ---------- catálogos (una sola vez) ---------- */
   const [catalogos, setCatalogos] = useState(null);
   const [errorArranque, setErrorArranque] = useState(null);
+  /* Contador para volver a pedir los catálogos sin recargar la página. */
+  const [reintento, setReintento] = useState(0);
   /* Schema al que está conectada la API: `beta` es PRODUCCIÓN y se advierte. */
   const [entorno, setEntorno] = useState(null);
 
@@ -80,6 +82,7 @@ export default function App() {
     setPanel(null);
     setAdmin(null);
     setEmpresaId(null);
+    setErrorArranque(null);
     setVista("resumen");
   }, []);
 
@@ -101,24 +104,54 @@ export default function App() {
       .catch(() => setEntorno(null));
   }, []);
 
-  /* ---------- carga inicial (solo con sesión) ---------- */
+  /* ---------- carga inicial (solo con sesión) ---------- *
+   * Se reintenta antes de rendirse. La primera petición tras iniciar sesión
+   * abre conexiones nuevas contra RDS y puede agotar el tiempo de espera; el
+   * síntoma era un error de API justo al entrar que se arreglaba recargando
+   * la página, porque al recargar el pool ya estaba caliente.
+   *
+   * Las dependencias son `perfil` y `reintento`, NO `empresaId`: al fijar la
+   * empresa del superusuario aquí mismo, tenerla en las dependencias volvía a
+   * pedir los catálogos una segunda vez sin necesidad.
+   */
   useEffect(() => {
     if (!perfil) return;
-    api
-      .catalogos()
-      .then((c) => {
+    let vivo = true;
+    let temporizador = null;
+
+    const intentar = async (restantes) => {
+      try {
+        const c = await api.catalogos();
+        if (!vivo) return;
         setCatalogos(c);
+        setErrorArranque(null);
         // Un superusuario no tiene empresa propia: se abre en la que tenga más
         // personal para que la vista no arranque vacía.
-        if (perfil.superusuario && empresaId == null) {
+        if (perfil.superusuario) {
           const conDatos = [...c.empresas]
             .filter((e) => e.usuarios > 0)
             .sort((a, b) => b.empleados - a.empleados);
-          setEmpresaId((conDatos[0] ?? c.empresas[0])?.id ?? null);
+          const elegida = (conDatos[0] ?? c.empresas[0])?.id ?? null;
+          setEmpresaId((actual) => actual ?? elegida);
         }
-      })
-      .catch((e) => setErrorArranque(e.message));
-  }, [perfil, empresaId]);
+      } catch (e) {
+        if (!vivo) return;
+        /* Un 401/403 no se reintenta: no es un tropiezo de red, es la sesión. */
+        const transitorio = e.status !== 401 && e.status !== 403;
+        if (restantes > 0 && transitorio) {
+          temporizador = setTimeout(() => intentar(restantes - 1), 1200);
+          return;
+        }
+        setErrorArranque(e.message);
+      }
+    };
+
+    intentar(2);
+    return () => {
+      vivo = false;
+      if (temporizador) clearTimeout(temporizador);
+    };
+  }, [perfil, reintento]);
 
   const recargar = useCallback(async () => {
     if (empresaId == null) return;
@@ -374,12 +407,29 @@ export default function App() {
           <p className="hx-hint mt-3" style={{ fontSize: 12.5 }}>
             {errorArranque}
           </p>
-          <div className="hx-nota mt-4">
-            <span>
-              Levanta la API con <code className="mono">npm run server</code> y recarga. La API debe
-              responder en <code className="mono">http://localhost:4000/api/salud</code>.
-            </span>
+          {/* Antes la única salida era recargar la página a mano. */}
+          <div className="flex gap-2 mt-4">
+            <Btn
+              variant="primary"
+              onClick={() => {
+                setErrorArranque(null);
+                setReintento((n) => n + 1);
+              }}
+            >
+              <RefreshCw size={14} /> Reintentar
+            </Btn>
+            <Btn onClick={salir}>
+              <LogOut size={14} /> Salir
+            </Btn>
           </div>
+          {import.meta.env.DEV && (
+            <div className="hx-nota mt-4">
+              <span>
+                Si la API no responde, levántala con <code className="mono">npm run server</code>.
+                Debe contestar en <code className="mono">http://localhost:4000/api/salud</code>.
+              </span>
+            </div>
+          )}
         </div>
       </div>
     );
